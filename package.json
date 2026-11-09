@@ -1,0 +1,22 @@
+{
+  "name": "dworld-desktop-pet",
+  "desktopName": "dworld-desktop-pet.desktop",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "main": "main.mjs",
+  "scripts": {
+    "start": "./start.sh",
+    "start:remote": "electron .",
+    "preview": "./start.sh --preview",
+    "check": "node --check main.mjs && node --check renderer.mjs && node --check settings.mjs && node --check sprites.mjs && node --check preload.cjs && node --check screen-share.mjs && node --check link-server.mjs",
+    "check:linux": "npm run check && python3 -m py_compile wayland_capture.py",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "devDependencies": {
+    "electron": "45.2.3"
+  },
+  "dependencies": {
+    "ws": "^8.22.2"
+  }
+}

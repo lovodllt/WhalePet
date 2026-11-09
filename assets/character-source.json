@@ -1,0 +1,13 @@
+{
+  "name": "deepseek酱",
+  "pet_id": "pet_6ad3b4ca610081919d1e289803c71ecc",
+  "source": "用户现有的 GPT 宠物库",
+  "file": "ds-pet-sprites.png",
+  "sha256": "9aa8eb21f76e01da11b25384aca226b97ed82a58a5246dc73ff6e53fff1857dc",
+  "width": 1536,
+  "height": 1872,
+  "columns": 8,
+  "rows": 9,
+  "cell_width": 192,
+  "cell_height": 208
+}

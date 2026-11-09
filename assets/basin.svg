@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 70">
+  <defs>
+    <linearGradient id="steel" x2="1" y2=".25">
+      <stop stop-color="#71869a"/><stop offset=".2" stop-color="#d7e4ee"/>
+      <stop offset=".42" stop-color="#aebfce"/><stop offset=".7" stop-color="#e7f0f5"/><stop offset="1" stop-color="#788d9f"/>
+    </linearGradient>
+    <linearGradient id="rim" x2="0" y2="1"><stop stop-color="#f2f7fa"/><stop offset="1" stop-color="#8499aa"/></linearGradient>
+  </defs>
+  <g transform="scale(1 .64)">
+  <path d="M42 22 Q45 11 59 9 Q90 4 121 9 Q135 11 138 22 L159 83 Q160 91 150 95 Q90 105 30 95 Q20 91 21 83 Z" fill="url(#steel)" stroke="#53697c" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M46 21 Q90 27 134 21" fill="none" stroke="#f5f9fb" stroke-opacity=".75" stroke-width="3"/>
+  <path d="M45 35 Q50 58 55 74 M62 31 Q63 49 66 60" fill="none" stroke="#fff" stroke-opacity=".4" stroke-width="4" stroke-linecap="round"/>
+  <path d="M20 82 Q90 94 160 82 Q168 81 168 87 Q166 96 156 98 Q90 109 24 98 Q14 96 12 87 Q12 81 20 82Z" fill="url(#rim)" stroke="#53697c" stroke-width="3"/>
+  <path d="M21 87 Q90 99 159 87" fill="none" stroke="#f8fcff" stroke-width="2" opacity=".8"/>
+  </g>
+</svg>
