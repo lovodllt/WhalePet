@@ -397,6 +397,7 @@ api.onEvent(event => {
     }
     case 'settings': settings = event.settings; applySettings(); break;
     case 'observation': observation = event; applyObservation(); break;
+    case 'capture_visibility': document.documentElement.style.visibility = event.hidden ? 'hidden' : ''; break;
     case 'open_chat': panels('chat'); break;
     case 'play_animation': performMotion(event.name); break;
     case 'moving':

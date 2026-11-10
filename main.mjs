@@ -199,7 +199,7 @@ async function capture(manual = false, text) {
   const visible = pet.isVisible();
   try {
     const displays = screen.getAllDisplays();
-    pet.hide();
+    if (visible) notify({ type: 'capture_visibility', hidden: true });
     await new Promise(resolve => setTimeout(resolve, 90));
     let plan;
     if (screenShare) {
@@ -241,7 +241,7 @@ async function capture(manual = false, text) {
       notify({ type: 'error', message: error.message || '没有取得全部屏幕，请检查系统采集授权' });
     }
   } finally {
-    if (visible && !locked && !closing) pet.showInactive();
+    if (visible && !closing) notify({ type: 'capture_visibility', hidden: false });
   }
 }
 
