@@ -457,6 +457,7 @@ else {
   const position = clampPosition({ x: area.x + area.width - 460, y: area.y + area.height - 680 }, size, area);
   const iconPath = join(root, 'assets/app-icon.png');
   pet = new BrowserWindow({ ...size, ...position,
+    ...(process.platform === 'linux' ? { type: 'dock' } : {}),
     frame: false, transparent: true, resizable: false, alwaysOnTop: true, skipTaskbar: true, show: false, hasShadow: false,
     title: 'Dworld 桌面伙伴', icon: iconPath, webPreferences: { preload: join(root, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
   pet.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
