@@ -2,7 +2,7 @@ import { createSpritePlayer, interactionClips } from './sprites.mjs';
 
 const $ = selector => document.querySelector(selector);
 const api = window.pet;
-let { settings, preview, remote, observation } = await api.bootstrap();
+let { settings, preview, remote, observation, x11 } = await api.bootstrap();
 let connected = false, phase = 'awake', mode = 'idle', dragging = false, recording, continuous = false;
 let pointerStart, touched, bubbleTimer, shaping, latestReply;
 let playback, gain, sources = [], audioGeneration = -1, audioEnd = false, audioTime = 0;
@@ -359,17 +359,20 @@ $('#avatar').addEventListener('pointerdown', event => {
   if (event.button !== 0) return;
   pointerStart = { x: event.screenX, y: event.screenY }; dragging = false;
   $('#avatar').setPointerCapture(event.pointerId);
-  action({ operation: 'drag_start' });
+  action({ operation: 'drag_start', ...pointerStart });
 });
 $('#avatar').addEventListener('pointermove', event => {
   if (!pointerStart) return;
   if (Math.hypot(event.screenX - pointerStart.x, event.screenY - pointerStart.y) > 5) {
-    if (!dragging) { dragging = true; setMenu(false); state('dragging'); }
-    action({ operation: 'drag' });
+    if (!dragging) {
+      dragging = true; setMenu(false); state('dragging');
+      action({ operation: 'drag', x: event.screenX, y: event.screenY });
+    } else if (!x11) action({ operation: 'drag', x: event.screenX, y: event.screenY });
   }
 });
-$('#avatar').addEventListener('pointerup', () => {
+$('#avatar').addEventListener('pointerup', event => {
   if (!pointerStart) return;
+  if (dragging) action({ operation: 'drag', x: event.screenX, y: event.screenY });
   const wasDragging = dragging; pointerStart = undefined; dragging = false;
   action({ operation: 'drag_end' });
   clearTimeout(touched); state(wasDragging ? 'landing' : 'touched');

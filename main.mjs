@@ -17,12 +17,24 @@ let pet, settingsWindow, tray, bridge, settings, status = {}, lastReply;
 let remote, remoteSocket, reconnectTimer;
 let dragging = false, moving = false, panel = false, locked = false, observing = false;
 let captureAt = Date.now(), spokeAt = 0, previousPixels = '';
-let closing = false, dragStart, movement, shapeTimer, roamAfterSettings = false;
+let closing = false, dragStart, dragTimer, dragLastPosition, movement, shapeTimer, roamAfterSettings = false;
 let speechPlaying = false;
 let observationTimer, statusTimer, roamTimer;
 let captureGeneration = 0;
 let observationPending = false;
 const wayland = process.platform === 'linux' && process.env.XDG_SESSION_TYPE === 'wayland';
+const x11 = process.platform === 'linux' && (app.commandLine.hasSwitch('ozone-platform')
+  ? app.commandLine.getSwitchValue('ozone-platform') === 'x11'
+  : !wayland);
+function setX11DockType(window) {
+  const handle = window.getNativeWindowHandle();
+  const id = `0x${handle.readUInt32LE(0).toString(16)}`;
+  return new Promise(resolve => {
+    const setter = spawn('xprop', ['-id', id, '-f', '_NET_WM_WINDOW_TYPE', '32a', '-set', '_NET_WM_WINDOW_TYPE', '_NET_WM_WINDOW_TYPE_DOCK'], { stdio: 'ignore' });
+    setter.once('error', resolve);
+    setter.once('close', code => resolve(code === 0 ? undefined : new Error(`xprop exited with ${code}`)));
+  });
+}
 const screenShare = wayland ? new ScreenShare(join(root, 'wayland_capture.py')) : undefined;
 let captureNeedsUser = wayland;
 const settingsFile = () => join(app.getPath('userData'), 'preferences.json');
@@ -348,8 +360,26 @@ function setShape(regions) {
   if (rects.length) pet.setShape(rects);
 }
 
+function updateDragPosition(pointer) {
+  if (!dragStart || !Number.isFinite(pointer?.x) || !Number.isFinite(pointer?.y)) return;
+  const x = Math.round(dragStart.bounds.x + pointer.x - dragStart.pointer.x);
+  const y = Math.round(dragStart.bounds.y + pointer.y - dragStart.pointer.y);
+  if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y) || Math.abs(x) > 2147483647 || Math.abs(y) > 2147483647) return;
+  if (x === dragLastPosition?.x && y === dragLastPosition?.y) return;
+  pet.setPosition(x, y);
+  dragLastPosition = { x, y };
+}
+
+function stopDrag() {
+  const wasMoving = !!dragTimer;
+  if (dragTimer) clearInterval(dragTimer);
+  dragTimer = undefined;
+  if (wasMoving && dragging && x11) updateDragPosition(screen.getCursorScreenPoint());
+  dragging = false; dragStart = undefined; dragLastPosition = undefined;
+}
+
 function setupIPC() {
-  ipcMain.handle('pet:bootstrap', () => ({ settings, preview, remote: !!remote, observation: observationState() }));
+  ipcMain.handle('pet:bootstrap', () => ({ settings, preview, remote: !!remote, observation: observationState(), x11 }));
   ipcMain.handle('pet:settings', (_event, patch) => saveSettings(patch));
   ipcMain.handle('pet:observation', (_event, enabled) => setObservation(!!enabled));
   ipcMain.on('pet:action', (_event, command) => {
@@ -363,9 +393,30 @@ function setupIPC() {
       case 'restart': app.relaunch(); app.quit(); break;
       case 'shape': clearTimeout(shapeTimer); shapeTimer = setTimeout(() => setShape(command.regions), 10); break;
       case 'panel': panel = !!command.open; if (panel) stopMovement(); break;
-      case 'drag_start': dragging = true; stopMovement(); dragStart = { pointer: screen.getCursorScreenPoint(), bounds: pet.getBounds() }; break;
-      case 'drag': if (dragging) { const p = screen.getCursorScreenPoint(); pet.setPosition(dragStart.bounds.x + p.x - dragStart.pointer.x, dragStart.bounds.y + p.y - dragStart.pointer.y); } break;
-      case 'drag_end': dragging = false; break;
+      case 'drag_start': {
+        stopDrag();
+        dragging = true; stopMovement();
+        const pointer = !x11 && wayland && Number.isFinite(command.x) && Number.isFinite(command.y)
+          ? { x: command.x, y: command.y }
+          : screen.getCursorScreenPoint();
+        dragStart = { pointer, bounds: pet.getBounds() };
+        dragLastPosition = { x: dragStart.bounds.x, y: dragStart.bounds.y };
+        break;
+      }
+      case 'drag':
+        if (dragging && dragStart) {
+          if (x11) {
+            if (!dragTimer) {
+              updateDragPosition(screen.getCursorScreenPoint());
+              dragTimer = setInterval(() => updateDragPosition(screen.getCursorScreenPoint()), (1000 / 15));
+            }
+          } else {
+            const pointer = wayland ? { x: command.x, y: command.y } : screen.getCursorScreenPoint();
+            updateDragPosition(pointer);
+          }
+        }
+        break;
+      case 'drag_end': stopDrag(); break;
       case 'roam_now': if (!roam(true)) notify({ type: 'notice', message: '她现在不方便移动。' }); break;
       case 'input': {
         if (typeof command.text !== 'string' || !command.text.trim() || command.text.length > 4000) break;
@@ -412,6 +463,10 @@ else {
   pet.webContents.on('will-navigate', event => event.preventDefault());
   await pet.loadFile(join(root, 'index.html'));
   pet.showInactive();
+  if (x11) {
+    const error = await setX11DockType(pet);
+    if (error) console.warn(`Could not mark the pet window as a dock window: ${error.message}`);
+  }
   const icon = nativeImage.createFromPath(iconPath).resize({ height: 28 });
   tray = new Tray(icon); tray.setToolTip('Dworld 桌面伙伴'); updateTray();
   tray.on('double-click', () => { locked = false; pet.showInactive(); });
@@ -449,7 +504,7 @@ else {
 app.on('before-quit', () => {
   closing = true;
   clearTimeout(reconnectTimer);
-  stopScreenShare();
+  stopScreenShare(); stopDrag();
   clearInterval(statusTimer); clearInterval(observationTimer); clearInterval(roamTimer); stopMovement();
   send({ operation: 'close' });
   remoteSocket?.close();
