@@ -1,5 +1,5 @@
 export const defaults = {
-  mode: 'normal', observationEnabled: true, voice: false, roam: true, scale: 1, volume: .75,
+  mode: 'normal', observationEnabled: true, voice: false, roam: true, scale: 1, volume: .75, fps: 30,
   normalCapture: 300, companionCapture: 60, normalSpeech: 600, companionSpeech: 120,
   microphone: '', speaker: ''
 };
@@ -14,6 +14,7 @@ export function normalizeSettings(input) {
   for (const [name, low, high] of [['scale', .5, 1.8], ['volume', 0, 1]]) {
     if (Number.isFinite(input[name])) result[name] = Math.max(low, Math.min(high, input[name]));
   }
+  if (Number.isFinite(input.fps)) result.fps = Math.round(Math.max(1, Math.min(60, input.fps)));
   for (const name of ['microphone', 'speaker']) if (typeof input[name] === 'string') result[name] = input[name].slice(0, 300);
   return result;
 }

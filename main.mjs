@@ -408,7 +408,7 @@ function setupIPC() {
           if (x11) {
             if (!dragTimer) {
               updateDragPosition(screen.getCursorScreenPoint());
-              dragTimer = setInterval(() => updateDragPosition(screen.getCursorScreenPoint()), (1000 / 15));
+              dragTimer = setInterval(() => updateDragPosition(screen.getCursorScreenPoint()), (1000 / settings.fps));
             }
           } else {
             const pointer = wayland ? { x: command.x, y: command.y } : screen.getCursorScreenPoint();
