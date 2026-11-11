@@ -178,7 +178,7 @@ function panels(target) {
   $('#chat').hidden = target !== 'chat';
   $('#bubble').hidden = true;
   setMenu(false);
-  if (target === 'chat') $('#input').focus();
+  if (target === 'chat') { action({ operation: 'focus' }); $('#input').focus(); }
   layoutCompanions();
   shape();
 }
@@ -238,7 +238,7 @@ async function audioChunk(event) {
   const view = new DataView(bytes.buffer);
   const samples = new Float32Array(Math.floor(bytes.length / 2));
   for (let i = 0; i < samples.length; i++) samples[i] = view.getInt16(i * 2, true) / 32768;
-  const preRoll = audioTime ? 0 : 6000;
+  const preRoll = audioTime ? 0 : 7200;
   const buffer = playback.createBuffer(1, samples.length + preRoll, 24000); buffer.copyToChannel(samples, 0, preRoll);
   const source = playback.createBufferSource(); source.buffer = buffer; source.connect(gain);
   const generation = audioGeneration;
@@ -347,6 +347,7 @@ $('#form').addEventListener('submit', event => {
   if (!text) return;
   stopPlayback(); message(text, 'self'); $('#input').value = '';
   action({ operation: 'input', text, message_id: crypto.randomUUID() });
+  $('#input').focus();
 });
 $('#input').addEventListener('keydown', event => {
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); $('#form').requestSubmit(); }
@@ -387,9 +388,15 @@ $('#avatar').addEventListener('contextmenu', event => {
 document.addEventListener('contextmenu', event => event.preventDefault());
 document.addEventListener('keydown', event => { if (event.key === 'Escape') panels(null); });
 document.addEventListener('pointerdown', event => {
+  if (!$('#chat').hidden && !event.target.closest('#chat')) panels(null);
   if (!$('#toolbar').hidden && !event.target.closest('#toolbar, #avatar')) setMenu(false);
 });
-window.addEventListener('blur', () => { if (!dragging && !$('#toolbar').hidden) setMenu(false); });
+function dismissPanels() {
+  if (dragging) return;
+  if (!$('#chat').hidden) panels(null);
+  else if (!$('#toolbar').hidden) setMenu(false);
+}
+window.addEventListener('blur', dismissPanels);
 $('#avatar').addEventListener('pointerdown', event => {
   if (event.button !== 0) return;
   pointerStart = { x: event.screenX, y: event.screenY }; dragging = false;
@@ -435,6 +442,7 @@ api.onEvent(event => {
     }
     case 'settings': settings = event.settings; if (!settings.voice && pendingReply) showReply(pendingReply); applySettings(); break;
     case 'observation': observation = event; applyObservation(); break;
+    case 'window_blur': dismissPanels(); break;
     case 'capture_visibility': document.documentElement.style.visibility = event.hidden ? 'hidden' : ''; break;
     case 'open_chat': panels('chat'); break;
     case 'play_animation': performMotion(event.name); break;

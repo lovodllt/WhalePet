@@ -415,6 +415,7 @@ function setupIPC() {
   ipcMain.on('pet:action', (_event, command) => {
     switch (command.operation) {
       case 'find': findPet(); break;
+      case 'focus': pet.focus(); break;
       case 'open_settings': openSettings(command.tab); break;
       case 'close_settings': settingsWindow?.close(); break;
       case 'play_animation': notify({ type: 'play_animation', name: command.name }); break;
@@ -492,6 +493,7 @@ else {
     ...(process.platform === 'linux' ? { type: 'dock' } : {}),
     frame: false, transparent: true, resizable: false, alwaysOnTop: true, skipTaskbar: true, show: false, hasShadow: false,
     title: 'Dworld 桌面伙伴', icon: iconPath, webPreferences: { preload: join(root, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  pet.on('blur', () => notify({ type: 'window_blur' }));
   pet.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   pet.webContents.on('will-navigate', event => event.preventDefault());
   await pet.loadFile(join(root, 'index.html'));

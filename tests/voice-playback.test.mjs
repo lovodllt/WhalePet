@@ -51,10 +51,10 @@ test('text appears when speech begins and the first PCM is preserved after prero
   await p.flush();
   assert.equal(p.log.messages.length, 0);
   const buffer = p.log.buffers[0];
-  assert.equal(buffer.data.length, 6002);
-  assert.ok(buffer.data.slice(0, 6000).every(value => value === 0));
-  assert.deepEqual([...buffer.data.slice(6000)], [0.5, -0.5]);
-  assert.ok(Math.abs(p.log.timers.at(-1).delay - 285) < 1);
+  assert.equal(buffer.data.length, 7202);
+  assert.ok(buffer.data.slice(0, 7200).every(value => value === 0));
+  assert.deepEqual([...buffer.data.slice(7200)], [0.5, -0.5]);
+  assert.ok(Math.abs(p.log.timers.at(-1).delay - 335) < 1);
   p.emit({ type: 'audio_chunk', generation: 1, pcm: Buffer.from([0, 32]).toString('base64') });
   await p.flush();
   assert.equal(p.log.buffers[1].data.length, 1);
