@@ -45,7 +45,8 @@ function commandFor(value) {
 
 sockets.on('connection', ws => {
   const child = spawn(process.env.DWORLD_PYTHON || 'python3', [join(root, 'bridge.py')], {
-    cwd: dirname(root), stdio: ['pipe', 'pipe', 'ignore']
+    cwd: dirname(root), stdio: ['pipe', 'pipe', 'ignore'],
+    env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' }
   });
   child.stdin.on('error', () => ws.close(1011));
   child.on('error', () => ws.close(1011));

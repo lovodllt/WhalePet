@@ -155,7 +155,8 @@ function startBridge() {
   const python = process.env.DWORLD_PYTHON || (process.platform === 'win32' ? 'py' : 'python3');
   const pythonArgs = process.platform === 'win32' && !process.env.DWORLD_PYTHON ? ['-3'] : [];
   bridge = spawn(python, [...pythonArgs, join(root, 'bridge.py')], {
-    cwd: dirname(root), stdio: ['pipe', 'pipe', 'pipe']
+    cwd: dirname(root), stdio: ['pipe', 'pipe', 'pipe'],
+    env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' }
   });
   createInterface({ input: bridge.stdout }).on('line', line => {
     try { emitBridge(JSON.parse(line)); }
