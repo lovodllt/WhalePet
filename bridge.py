@@ -48,6 +48,7 @@ class Bridge:
         self.latest = None
         self.asr = self.tts = None
         self.reply_busy = False
+        self.submitting = False
         self.waiting_screen = None
         self.waiting_screen_id = None
         self.gateway_config = deepcopy(config)
@@ -83,6 +84,8 @@ class Bridge:
                 self.wake.wait(1)
                 self.wake.clear()
                 generation = self.generation
+                if self.submitting:
+                    continue
                 if generation == failed_generation:
                     continue
                 if generation == self.waiting_screen:
@@ -206,17 +209,20 @@ class Bridge:
             with self.pipeline(readonly=True) as pipeline:
                 emit(dict(pipeline.status(), type='status'))
         elif operation == 'input':
-            self.interrupt()
-            if command.get('clear_screen') or command.get('wait_for_screen'):
-                self.latest = None
-            if command.get('wait_for_screen'):
-                self.waiting_screen, self.waiting_screen_id = self.generation, command['message_id']
+            self.submitting = True
             try:
+                self.interrupt()
+                if command.get('clear_screen') or command.get('wait_for_screen'):
+                    self.latest = None
+                if command.get('wait_for_screen'):
+                    self.waiting_screen, self.waiting_screen_id = self.generation, command['message_id']
                 with self.pipeline() as pipeline:
                     result = pipeline.submit(command['text'], command['message_id'])
             except Exception:
                 self.waiting_screen = self.waiting_screen_id = None
                 raise
+            finally:
+                self.submitting = False
             emit({'type': 'accepted', 'held': result['held']})
             self.wake.set()
         elif operation == 'observe':

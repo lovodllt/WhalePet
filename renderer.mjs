@@ -5,7 +5,7 @@ const api = window.pet;
 let { settings, preview, remote, observation, x11 } = await api.bootstrap();
 let connected = false, phase = 'awake', mode = 'idle', dragging = false, recording, continuous = false;
 let recordingRequest;
-let pointerStart, touched, bubbleTimer, shaping, latestReply;
+let pointerStart, touched, bubbleTimer, shaping, latestReply, pendingReply, replyTimer;
 let playback, gain, sources = [], audioGeneration = -1, audioEnd = false, audioTime = 0;
 const action = command => api.action(command);
 const sprite = createSpritePlayer($('#character'), head => {
@@ -202,7 +202,18 @@ function applyObservation() {
   shape();
 }
 
-function stopPlayback(report = true) {
+function showReply(event) {
+  clearTimeout(replyTimer);
+  pendingReply = undefined;
+  event.texts.forEach((text, index) => {
+    message(text); action({ operation: 'ack', outbound_id: event.outbound_id, index });
+  });
+  bubble(event.texts.join('\n')); state(sources.length && audioGeneration >= 0 ? 'speaking' : recording ? 'listening' : 'idle'); label('陪伴中');
+}
+
+function stopPlayback(report = true, keepPending = false) {
+  clearTimeout(replyTimer);
+  if (!keepPending) pendingReply = undefined;
   const interrupted = sources.length > 0;
   audioGeneration = -1;
   audioEnd = false;
@@ -227,7 +238,8 @@ async function audioChunk(event) {
   const view = new DataView(bytes.buffer);
   const samples = new Float32Array(Math.floor(bytes.length / 2));
   for (let i = 0; i < samples.length; i++) samples[i] = view.getInt16(i * 2, true) / 32768;
-  const buffer = playback.createBuffer(1, samples.length, 24000); buffer.copyToChannel(samples, 0);
+  const preRoll = audioTime ? 0 : 6000;
+  const buffer = playback.createBuffer(1, samples.length + preRoll, 24000); buffer.copyToChannel(samples, 0, preRoll);
   const source = playback.createBufferSource(); source.buffer = buffer; source.connect(gain);
   const generation = audioGeneration;
   source.onended = () => {
@@ -239,6 +251,12 @@ async function audioChunk(event) {
   };
   sources.push(source);
   audioTime = Math.max(audioTime, playback.currentTime + .035);
+  if (preRoll && pendingReply) {
+    const reply = pendingReply;
+    replyTimer = setTimeout(() => {
+      if (audioGeneration === generation && pendingReply === reply) showReply(reply);
+    }, Math.max(0, (audioTime + preRoll / 24000 - playback.currentTime) * 1000));
+  }
   source.start(audioTime); audioTime += buffer.duration;
   state('speaking');
 }
@@ -407,7 +425,7 @@ let audioQueue = Promise.resolve();
 api.onEvent(event => {
   switch (event.type) {
     case 'connected': connected = !event.preview; label(preview ? '界面预览' : '陪伴中'); break;
-    case 'disconnected': connected = false; label('连接已断开', false); stopPlayback(); stopRecording(true); break;
+    case 'disconnected': if (pendingReply) showReply(pendingReply); connected = false; label('连接已断开', false); stopPlayback(); stopRecording(true); break;
     case 'status': {
       phase = event.phase; $('#avatar').dataset.phase = phase;
       syncSprite(); shape();
@@ -415,7 +433,7 @@ api.onEvent(event => {
       if (!event.available && (recording || recordingRequest)) stopRecording(true);
       break;
     }
-    case 'settings': settings = event.settings; applySettings(); break;
+    case 'settings': settings = event.settings; if (!settings.voice && pendingReply) showReply(pendingReply); applySettings(); break;
     case 'observation': observation = event; applyObservation(); break;
     case 'capture_visibility': document.documentElement.style.visibility = event.hidden ? 'hidden' : ''; break;
     case 'open_chat': panels('chat'); break;
@@ -427,12 +445,11 @@ api.onEvent(event => {
     case 'thinking': state('thinking'); label('想一想'); break;
     case 'accepted': if (event.held) message('消息已留下，等她方便时再回复。', 'notice'); break;
     case 'reply': {
-      latestReply = event; stopPlayback(false);
-      event.texts.forEach((text, index) => {
-        message(text); action({ operation: 'ack', outbound_id: event.outbound_id, index });
-      });
-      bubble(event.texts.join('\n')); state(recording ? 'listening' : 'idle'); label('陪伴中');
-      if (settings.voice) action({ operation: 'speak', outbound_id: event.outbound_id, generation: event.generation });
+      stopPlayback(false); latestReply = event;
+      if (settings.voice) {
+        pendingReply = event; state('thinking'); label('准备语音');
+        action({ operation: 'speak', outbound_id: event.outbound_id, generation: event.generation });
+      } else showReply(event);
       break;
     }
     case 'quiet': state(recording ? 'listening' : 'idle'); label('陪伴中'); break;
@@ -446,21 +463,29 @@ api.onEvent(event => {
     case 'asr_error': message('这句语音未能识别，请再说一次。', 'notice'); break;
     case 'microphone_toggle': event.enabled ? startRecording(true) : stopRecording(true); break;
     case 'stop_microphone': stopRecording(true); stopPlayback(); break;
-    case 'audio_start': stopPlayback(false); audioGeneration = event.generation; audioEnd = false; break;
-    case 'audio_chunk': audioQueue = audioQueue.then(() => audioChunk(event)).catch(() => message('语音播放失败', 'notice')); break;
+    case 'audio_start':
+      if (pendingReply?.generation === event.generation) { stopPlayback(false, true); audioGeneration = event.generation; audioEnd = false; }
+      break;
+    case 'audio_chunk': audioQueue = audioQueue.then(() => audioChunk(event)).catch(() => {
+      if (pendingReply) showReply(pendingReply);
+      stopPlayback(); message('语音播放失败', 'notice');
+    }); break;
     case 'audio_end':
       audioQueue = audioQueue.then(() => {
         if (event.generation !== audioGeneration) return;
         audioEnd = event.complete;
-        if (!event.complete) { stopPlayback(); message('语音播放未完成', 'notice'); }
-        else if (!sources.length) { action({ operation: 'audio_receipt', outbound_id: event.outbound_id, complete: true }); state(recording ? 'listening' : 'idle'); }
+        if (!event.complete || (!sources.length && pendingReply)) {
+          if (pendingReply) showReply(pendingReply);
+          stopPlayback(); message('语音播放未完成', 'notice');
+        } else if (!sources.length) { action({ operation: 'audio_receipt', outbound_id: event.outbound_id, complete: true }); state(recording ? 'listening' : 'idle'); }
       });
       break;
-    case 'audio_stop': stopPlayback(); break;
-    case 'clear_history': $('#history').replaceChildren(); latestReply = undefined; break;
+    case 'audio_stop': stopPlayback(true, true); break;
+    case 'clear_history': stopPlayback(false); $('#history').replaceChildren(); latestReply = undefined; break;
     case 'notice': message(event.message, 'notice'); bubble(event.message); break;
     case 'error':
       if (event.source === 'microphone') stopRecording(true);
+      if (event.message === '操作未完成' && pendingReply) showReply(pendingReply);
       message(event.message + (event.detail ? `（${event.detail}）` : ''), 'notice'); label(event.message, false); state('failed'); break;
   }
 });
