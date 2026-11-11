@@ -28,8 +28,10 @@ require('node:readline').createInterface({input:process.stdin}).on('line', line 
   if (c.operation === 'close') process.exit();
   if (c.operation === 'status') console.log(JSON.stringify({type:'status',phase:'awake',available:true}));
   if (c.operation === 'input') console.log(JSON.stringify({type:'reply',texts:[c.text],outbound_id:'test',generation:1,delivery:'private',extra_received:'extra' in c}));
+  if (c.operation === 'input' && c.wait_for_screen) console.log(JSON.stringify({type:'accepted',wait:c.wait_for_screen,clear:c.clear_screen}));
   if (c.operation === 'ack') console.log(JSON.stringify({type:'accepted',index:c.index}));
-  if (c.operation === 'observe') console.log(JSON.stringify({type:'observed',screens:c.screens,text:c.text}));
+  if (c.operation === 'observe') console.log(JSON.stringify({type:'observed',screens:c.screens,text:c.text,submitted:c.submitted,message_id:c.message_id}));
+  if (c.operation === 'screen_unavailable') console.log(JSON.stringify({type:'observation_finished',message_id:c.message_id}));
   if (c.operation === 'pause_observation') console.log(JSON.stringify({type:'observation_finished'}));
   if (c.operation === 'mic_start') console.log(JSON.stringify({type:'asr_ready'}));
   if (c.operation === 'pcm') console.log(JSON.stringify({type:'transcript',text:'我在说话',pcm:c.pcm}));
@@ -75,7 +77,17 @@ require('node:readline').createInterface({input:process.stdin}).on('line', line 
       jpeg: Buffer.alloc(32 * 1024, i).toString('base64')
     }));
     assert.deepEqual(await exchange({ operation: 'observe', screens, manual: true, may_speak: false, text: '看看屏幕' }),
-      { type: 'observed', screens, text: '看看屏幕' });
+      { type: 'observed', screens, text: '看看屏幕', submitted: false });
+    ws.send(JSON.stringify({ operation: 'input', text: '看看屏幕', message_id: 'screen-1', wait_for_screen: true }));
+    await once(ws, 'message');
+    messages.shift();
+    if (!messages.length) await once(ws, 'message');
+    assert.deepEqual(messages.shift(), { type: 'accepted', wait: true, clear: false });
+    assert.deepEqual(await exchange({ operation: 'observe', screens, manual: true, may_speak: false,
+      text: '看看屏幕', submitted: true, message_id: 'screen-1' }),
+      { type: 'observed', screens, text: '看看屏幕', submitted: true, message_id: 'screen-1' });
+    assert.deepEqual(await exchange({ operation: 'screen_unavailable', message_id: 'screen-1' }),
+      { type: 'observation_finished', message_id: 'screen-1' });
     assert.equal((await exchange({ operation: 'pause_observation' })).type, 'observation_finished');
     assert.equal((await exchange({ operation: 'mic_start' })).type, 'asr_ready');
     const pcm = Buffer.alloc(32000).toString('base64');
