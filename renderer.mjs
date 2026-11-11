@@ -2,8 +2,9 @@ import { createSpritePlayer, interactionClips } from './sprites.mjs';
 
 const $ = selector => document.querySelector(selector);
 const api = window.pet;
-let { settings, preview, remote, observation } = await api.bootstrap();
+let { settings, preview, remote, observation, x11 } = await api.bootstrap();
 let connected = false, phase = 'awake', mode = 'idle', dragging = false, recording, continuous = false;
+let recordingRequest;
 let pointerStart, touched, bubbleTimer, shaping, latestReply;
 let playback, gain, sources = [], audioGeneration = -1, audioEnd = false, audioTime = 0;
 const action = command => api.action(command);
@@ -97,16 +98,15 @@ function layoutMenu() {
 function syncMenu() {
   const listening = !!recording && continuous;
   $('#quick-mic').setAttribute('aria-pressed', String(listening));
-  $('#quick-mic').setAttribute('aria-label', remote ? '远程语音暂未接入' : listening ? '关闭持续听' : '开启持续听');
-  $('#quick-mic').title = remote ? '远程语音暂未接入' : listening ? '关闭持续听' : '开启持续听';
-  $('#quick-mic').disabled = remote;
+  $('#quick-mic').setAttribute('aria-label', listening ? '关闭持续听' : '开启持续听');
+  $('#quick-mic').title = listening ? '关闭持续听' : '开启持续听';
   $('#quick-roam').setAttribute('aria-pressed', String(settings.roam));
   $('#quick-roam').setAttribute('aria-label', settings.roam ? '关闭自由移动' : '开启自由移动');
   $('#quick-roam').title = settings.roam ? '关闭自由移动' : '开启自由移动';
   $('#look').setAttribute('aria-pressed', String(observation.enabled));
-  $('#look').setAttribute('aria-label', remote ? '远程观察暂未接入' : observation.enabled ? '关闭观察' : '允许观察');
-  $('#look').title = remote ? '远程观察暂未接入' : observation.pending ? '等待授权' : observation.enabled ? '关闭观察' : '允许观察';
-  $('#look').disabled = remote || observation.pending;
+  $('#look').setAttribute('aria-label', observation.enabled ? '关闭观察' : '允许观察');
+  $('#look').title = observation.pending ? '等待授权' : observation.enabled ? '关闭观察' : '允许观察';
+  $('#look').disabled = observation.pending;
 }
 
 function setMenu(open) {
@@ -244,21 +244,27 @@ async function audioChunk(event) {
 }
 
 async function startRecording(handsfree) {
-  if (remote) { message('远程语音暂未接入', 'notice'); return; }
   if (preview) { message('界面预览不接收麦克风', 'notice'); return; }
-  if (recording) { await stopRecording(true); return; }
+  if (remote && !connected) { message('连接 Linux 人物后端后可以使用麦克风', 'notice'); return; }
+  if (recording || recordingRequest) { await stopRecording(true); return; }
+  const request = {};
+  recordingRequest = request;
+  let stream, context, installed = false;
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: {
       echoCancellation: true, noiseSuppression: true, autoGainControl: true,
       ...(settings.microphone ? { deviceId: { exact: settings.microphone } } : {})
     } });
-    const context = new AudioContext({ sampleRate: 16000 });
+    if (recordingRequest !== request) return;
+    context = new AudioContext({ sampleRate: 16000 });
     await context.audioWorklet.addModule('microphone.mjs');
+    if (recordingRequest !== request) return;
     const source = context.createMediaStreamSource(stream);
     const processor = new AudioWorkletNode(context, 'pet-microphone');
     const silent = context.createGain(); silent.gain.value = 0;
     source.connect(processor).connect(silent).connect(context.destination);
     recording = { stream, context, processor }; continuous = handsfree;
+    installed = true;
     action({ operation: 'mic_start' });
     action({ operation: 'mic_active', active: true });
     processor.port.onmessage = event => {
@@ -278,18 +284,28 @@ async function startRecording(handsfree) {
     syncMenu();
     state('listening');
     await context.resume();
-    label(handsfree ? '正在听' : '录音中');
+    if (recordingRequest === request) label(handsfree ? '正在听' : '录音中');
   } catch {
-    await stopRecording(true);
-    message('无法使用麦克风，请检查设备与授权', 'notice');
+    if (recordingRequest === request) {
+      await stopRecording(true);
+      message('无法使用麦克风，请检查设备与授权', 'notice');
+    }
+  } finally {
+    if (recordingRequest === request) recordingRequest = undefined;
+    if (!installed) {
+      stream?.getTracks().forEach(track => track.stop());
+      if (context && context.state !== 'closed') await context.close();
+    }
   }
 }
 
 async function stopRecording(immediate = false) {
+  recordingRequest = undefined;
   if (!recording) return;
   const previous = recording; recording = undefined; continuous = false;
   previous.stream.getTracks().forEach(track => track.stop());
-  previous.processor.disconnect(); await previous.context.close();
+  previous.processor.disconnect();
+  const closed = previous.context.close();
   $('#record span').textContent = '录音'; $('#record').classList.remove('active'); $('#handsfree').classList.remove('active');
   $('#mic-label').textContent = '文字输入';
   $('#mic-label').hidden = true;
@@ -304,6 +320,7 @@ async function stopRecording(immediate = false) {
     setTimeout(() => { if (!recording) action({ operation: 'mic_stop' }); }, 2500);
   }
   state('idle'); label('陪伴中');
+  await closed;
 }
 
 $('#form').addEventListener('submit', event => {
@@ -359,17 +376,20 @@ $('#avatar').addEventListener('pointerdown', event => {
   if (event.button !== 0) return;
   pointerStart = { x: event.screenX, y: event.screenY }; dragging = false;
   $('#avatar').setPointerCapture(event.pointerId);
-  action({ operation: 'drag_start' });
+  action({ operation: 'drag_start', ...pointerStart });
 });
 $('#avatar').addEventListener('pointermove', event => {
   if (!pointerStart) return;
   if (Math.hypot(event.screenX - pointerStart.x, event.screenY - pointerStart.y) > 5) {
-    if (!dragging) { dragging = true; setMenu(false); state('dragging'); }
-    action({ operation: 'drag' });
+    if (!dragging) {
+      dragging = true; setMenu(false); state('dragging');
+      action({ operation: 'drag', x: event.screenX, y: event.screenY });
+    } else if (!x11) action({ operation: 'drag', x: event.screenX, y: event.screenY });
   }
 });
-$('#avatar').addEventListener('pointerup', () => {
+$('#avatar').addEventListener('pointerup', event => {
   if (!pointerStart) return;
+  if (dragging) action({ operation: 'drag', x: event.screenX, y: event.screenY });
   const wasDragging = dragging; pointerStart = undefined; dragging = false;
   action({ operation: 'drag_end' });
   clearTimeout(touched); state(wasDragging ? 'landing' : 'touched');
@@ -392,7 +412,7 @@ api.onEvent(event => {
       phase = event.phase; $('#avatar').dataset.phase = phase;
       syncSprite(); shape();
       label(preview ? '界面预览' : ({ sleeping: '睡觉中', napping: '补觉中', eating: '吃饭中' }[phase] || (event.clock === 'PAUSED' ? '世界已暂停' : recording ? '正在听' : '陪伴中')));
-      if (!event.available && recording) stopRecording(true);
+      if (!event.available && (recording || recordingRequest)) stopRecording(true);
       break;
     }
     case 'settings': settings = event.settings; applySettings(); break;
@@ -446,7 +466,6 @@ api.onEvent(event => {
 });
 
 window.addEventListener('beforeunload', () => { sprite.stop(); stopPlayback(); if (recording) recording.stream.getTracks().forEach(track => track.stop()); });
-if (remote) for (const id of ['record', 'handsfree']) { $(`#${id}`).disabled = true; $(`#${id}`).title = '远程语音暂未接入'; }
 document.body.classList.toggle('preview', preview);
 applySettings();
 applyObservation();

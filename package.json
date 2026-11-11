@@ -7,8 +7,10 @@
   "main": "main.mjs",
   "scripts": {
     "start": "./start.sh",
+    "start:windows": "electron .",
     "start:remote": "electron .",
     "preview": "./start.sh --preview",
+    "preview:windows": "electron . --preview",
     "check": "node --check main.mjs && node --check renderer.mjs && node --check settings.mjs && node --check sprites.mjs && node --check preload.cjs && node --check screen-share.mjs && node --check link-server.mjs",
     "check:linux": "npm run check && python3 -m py_compile wayland_capture.py",
     "test": "node --test tests/*.test.mjs"

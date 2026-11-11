@@ -21,6 +21,14 @@ from virtual_character.storage import Store
 OUTPUT = threading.Lock()
 
 
+def configure_stdio():
+    """Keep the JSON line protocol UTF-8 on Windows code-page consoles."""
+    for stream in (sys.stdin, sys.stdout):
+        reconfigure = getattr(stream, 'reconfigure', None)
+        if reconfigure:
+            reconfigure(encoding='utf-8', errors='strict')
+
+
 def emit(value):
     with OUTPUT:
         print(json.dumps(value, ensure_ascii=False), flush=True)
@@ -269,6 +277,7 @@ class Bridge:
 
 
 def main():
+    configure_stdio()
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=Path, default=ROOT / 'config/local.json')
     args = parser.parse_args()

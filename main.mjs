@@ -4,7 +4,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
-import { capturePlan, portalCapturePlan, clampPosition, normalizeSettings } from './shared.mjs';
+import { capturePlan, portalCapturePlan, clampPosition, normalizeSettings, MAX_LINK_MESSAGE_BYTES, MAX_LINK_DISPLAYS } from './shared.mjs';
 import { ScreenShare } from './screen-share.mjs';
 import { interactionClips } from './sprites.mjs';
 import { WebSocket } from 'ws';
@@ -13,28 +13,57 @@ const root = dirname(fileURLToPath(import.meta.url));
 if (process.env.DWORLD_PET_DATA_DIR) app.setPath('userData', process.env.DWORLD_PET_DATA_DIR);
 const preview = process.argv.includes('--preview');
 const smoke = process.argv.includes('--smoke');
+const localBackend = process.argv.includes('--local-backend');
 let pet, settingsWindow, tray, bridge, settings, status = {}, lastReply;
 let remote, remoteSocket, reconnectTimer;
 let dragging = false, moving = false, panel = false, locked = false, observing = false;
 let captureAt = Date.now(), spokeAt = 0, previousPixels = '';
-let closing = false, dragStart, movement, shapeTimer, roamAfterSettings = false;
+let closing = false, dragStart, dragTimer, dragLastPosition, movement, shapeTimer, roamAfterSettings = false;
 let speechPlaying = false;
 let observationTimer, statusTimer, roamTimer;
 let captureGeneration = 0;
 let observationPending = false;
 const wayland = process.platform === 'linux' && process.env.XDG_SESSION_TYPE === 'wayland';
+const x11 = process.platform === 'linux' && (app.commandLine.hasSwitch('ozone-platform')
+  ? app.commandLine.getSwitchValue('ozone-platform') === 'x11'
+  : !wayland);
+function setX11DockType(window) {
+  const handle = window.getNativeWindowHandle();
+  const id = `0x${handle.readUInt32LE(0).toString(16)}`;
+  return new Promise(resolve => {
+    const setter = spawn('xprop', ['-id', id, '-f', '_NET_WM_WINDOW_TYPE', '32a', '-set', '_NET_WM_WINDOW_TYPE', '_NET_WM_WINDOW_TYPE_DOCK'], { stdio: 'ignore' });
+    setter.once('error', resolve);
+    setter.once('close', code => resolve(code === 0 ? undefined : new Error(`xprop exited with ${code}`)));
+  });
+}
 const screenShare = wayland ? new ScreenShare(join(root, 'wayland_capture.py')) : undefined;
 let captureNeedsUser = wayland;
-const settingsFile = () => join(app.getPath('userData'), 'preferences.json');
+const settingsFile = () => join(app.getPath('userData'), remote ? 'remote-preferences.json' : 'preferences.json');
 const send = value => {
   if (remote) {
-    if (!['status', 'input', 'ack', 'interrupt'].includes(value.operation)) return;
-    if (remoteSocket?.readyState === WebSocket.OPEN) remoteSocket.send(JSON.stringify(value));
-    else if (value.operation === 'input') notify({ type: 'error', message: '连接已断开，消息未发送' });
-  } else if (bridge?.stdin.writable) bridge.stdin.write(JSON.stringify(value) + '\n');
+    if (value.operation === 'close') return false;
+    if (remoteSocket?.readyState !== WebSocket.OPEN) {
+      if (value.operation === 'input') notify({ type: 'error', message: '连接已断开，消息未发送' });
+      return false;
+    }
+    const message = JSON.stringify(value);
+    if (Buffer.byteLength(message) > MAX_LINK_MESSAGE_BYTES) {
+      notify({ type: 'error', message: '屏幕画面超过远程连接的单次传输上限' });
+      return false;
+    }
+    if (remoteSocket.bufferedAmount > MAX_LINK_MESSAGE_BYTES) {
+      remoteSocket.terminate();
+      return false;
+    }
+    remoteSocket.send(message);
+    return true;
+  }
+  if (!bridge?.stdin.writable) return false;
+  bridge.stdin.write(JSON.stringify(value) + '\n');
+  return true;
 };
 const notify = value => { if (pet && !pet.isDestroyed()) pet.webContents.send('pet:event', value); };
-const observationState = () => ({ enabled: !remote && !!settings?.observationEnabled && (preview || !screenShare || !captureNeedsUser), pending: observationPending });
+const observationState = () => ({ enabled: !!settings?.observationEnabled && (preview || !screenShare || !captureNeedsUser), pending: observationPending });
 function notifyObservation() {
   const event = { type: 'observation', ...observationState() };
   notify(event);
@@ -51,7 +80,6 @@ function stopScreenShare() {
 
 async function saveSettings(patch) {
   const wasRoaming = settings.roam;
-  if (remote) patch = { ...patch, observationEnabled: false, voice: false };
   settings = normalizeSettings({ ...settings, ...patch });
   if (wasRoaming && !settings.roam) { roamAfterSettings = false; stopMovement(); }
   if (!settings.observationEnabled) {
@@ -74,7 +102,6 @@ async function saveSettings(patch) {
 }
 
 async function setObservation(enabled) {
-  if (remote && enabled) { notify({ type: 'notice', message: '远程观察暂未接入' }); return observationState(); }
   if (!enabled) {
     await saveSettings({ observationEnabled: false });
     return observationState();
@@ -140,8 +167,11 @@ function startBridge() {
     return;
   }
   if (remote) return startRemote();
-  bridge = spawn(process.env.DWORLD_PYTHON || 'python3', [join(root, 'bridge.py')], {
-    cwd: dirname(root), stdio: ['pipe', 'pipe', 'pipe']
+  const python = process.env.DWORLD_PYTHON || (process.platform === 'win32' ? 'py' : 'python3');
+  const pythonArgs = process.platform === 'win32' && !process.env.DWORLD_PYTHON ? ['-3'] : [];
+  bridge = spawn(python, [...pythonArgs, join(root, 'bridge.py')], {
+    cwd: dirname(root), stdio: ['pipe', 'pipe', 'pipe'],
+    env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' }
   });
   createInterface({ input: bridge.stdout }).on('line', line => {
     try { emitBridge(JSON.parse(line)); }
@@ -166,7 +196,7 @@ function startRemote() {
         || parts.length !== 4 || parts.some(n => !Number.isInteger(n) || n < 0 || n > 255)
         || parts[0] !== 100 || parts[1] < 64 || parts[1] > 127 || typeof remote.token !== 'string' || remote.token.length < 40)
       throw new Error();
-  } catch { notify({ type: 'error', message: '请检查远程连接配置 remote-link.json' }); return; }
+  } catch { notify({ type: 'error', message: '请配置 Linux 人物后端连接 remote-link.json，然后重启桌宠' }); return; }
   remoteSocket = new WebSocket(url, { headers: { Authorization: `Bearer ${remote.token}` }, handshakeTimeout: 10000 });
   remoteSocket.on('message', raw => {
     try {
@@ -179,6 +209,10 @@ function startRemote() {
   remoteSocket.on('error', () => {});
   remoteSocket.on('close', () => {
     status = {};
+    lastReply = undefined;
+    speechPlaying = false;
+    stopScreenShare();
+    updateTray();
     if (!closing) { notify({ type: 'disconnected' }); reconnectTimer = setTimeout(startRemote, 3000); }
   });
 }
@@ -200,6 +234,7 @@ async function capture(manual = false, text, messageId) {
   let forwarded = false;
   try {
     const displays = screen.getAllDisplays();
+    if (remote && displays.length > MAX_LINK_DISPLAYS) throw new Error(`远程连接最多支持同时观察 ${MAX_LINK_DISPLAYS} 块屏幕`);
     if (visible) notify({ type: 'capture_visibility', hidden: true });
     await new Promise(resolve => setTimeout(resolve, 90));
     let plan;
@@ -231,11 +266,14 @@ async function capture(manual = false, text, messageId) {
     }));
     const fingerprint = plan.map(({ image }) => image.resize({ width: 64 }).toJPEG(25).toString('base64')).join('|');
     if (!manual && fingerprint === previousPixels) { observing = false; return; }
-    previousPixels = fingerprint;
     const gap = settings.mode === 'companion' ? settings.companionSpeech : settings.normalSpeech;
-    send({ operation: 'observe', screens: frames, manual, text, message_id: messageId, submitted: !!messageId,
+    forwarded = send({ operation: 'observe', screens: frames, manual, text, message_id: messageId, submitted: !!messageId,
       may_speak: !speechPlaying && Date.now() - spokeAt >= gap * 1000 });
-    forwarded = true;
+    if (!forwarded) {
+      observing = false;
+      return;
+    }
+    previousPixels = fingerprint;
     notify({ type: 'observing', screen_count: frames.length });
   } catch (error) {
     if (generation === captureGeneration) {
@@ -284,12 +322,12 @@ function openSettings(tab = 'appearance') {
 function menuItems() {
   return [
     { label: '聊天', click: () => { pet.show(); pet.focus(); notify({ type: 'open_chat' }); } },
-    { label: '允许观察', type: 'checkbox', enabled: !remote, checked: observationState().enabled, click: item => setObservation(item.checked) },
+    { label: '允许观察', type: 'checkbox', checked: observationState().enabled, click: item => setObservation(item.checked) },
     { label: '互动动作', submenu: interactionClips.map(clip => ({ label: clip.label, click: () => notify({ type: 'play_animation', name: clip.name }) })) },
     { type: 'separator' },
     { label: '积极陪伴', type: 'checkbox', checked: settings.mode === 'companion', click: item => saveSettings({ mode: item.checked ? 'companion' : 'normal' }) },
-    { label: '持续听', type: 'checkbox', enabled: !remote, checked: !!status.listening, click: item => notify({ type: 'microphone_toggle', enabled: item.checked }) },
-    { label: '语音回复', type: 'checkbox', enabled: !remote, checked: settings.voice, click: item => saveSettings({ voice: item.checked }) },
+    { label: '持续听', type: 'checkbox', checked: !!status.listening, click: item => notify({ type: 'microphone_toggle', enabled: item.checked }) },
+    { label: '语音回复', type: 'checkbox', checked: settings.voice, click: item => saveSettings({ voice: item.checked }) },
     { label: '自由移动', type: 'checkbox', checked: settings.roam, click: item => saveSettings({ roam: item.checked }) },
     { label: '大小', submenu: [.5, .75, 1, 1.25, 1.5, 1.8].map(scale => ({
       label: `${Math.round(scale * 100)}%`, type: 'radio', checked: Math.abs(settings.scale - scale) < .001,
@@ -352,8 +390,26 @@ function setShape(regions) {
   if (rects.length) pet.setShape(rects);
 }
 
+function updateDragPosition(pointer) {
+  if (!dragStart || !Number.isFinite(pointer?.x) || !Number.isFinite(pointer?.y)) return;
+  const x = Math.round(dragStart.bounds.x + pointer.x - dragStart.pointer.x);
+  const y = Math.round(dragStart.bounds.y + pointer.y - dragStart.pointer.y);
+  if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y) || Math.abs(x) > 2147483647 || Math.abs(y) > 2147483647) return;
+  if (x === dragLastPosition?.x && y === dragLastPosition?.y) return;
+  pet.setPosition(x, y);
+  dragLastPosition = { x, y };
+}
+
+function stopDrag() {
+  const wasMoving = !!dragTimer;
+  if (dragTimer) clearInterval(dragTimer);
+  dragTimer = undefined;
+  if (wasMoving && dragging && x11) updateDragPosition(screen.getCursorScreenPoint());
+  dragging = false; dragStart = undefined; dragLastPosition = undefined;
+}
+
 function setupIPC() {
-  ipcMain.handle('pet:bootstrap', () => ({ settings, preview, remote: !!remote, observation: observationState() }));
+  ipcMain.handle('pet:bootstrap', () => ({ settings, preview, remote: !!remote, observation: observationState(), x11 }));
   ipcMain.handle('pet:settings', (_event, patch) => saveSettings(patch));
   ipcMain.handle('pet:observation', (_event, enabled) => setObservation(!!enabled));
   ipcMain.on('pet:action', (_event, command) => {
@@ -367,17 +423,38 @@ function setupIPC() {
       case 'restart': app.relaunch(); app.quit(); break;
       case 'shape': clearTimeout(shapeTimer); shapeTimer = setTimeout(() => setShape(command.regions), 10); break;
       case 'panel': panel = !!command.open; if (panel) stopMovement(); break;
-      case 'drag_start': dragging = true; stopMovement(); dragStart = { pointer: screen.getCursorScreenPoint(), bounds: pet.getBounds() }; break;
-      case 'drag': if (dragging) { const p = screen.getCursorScreenPoint(); pet.setPosition(dragStart.bounds.x + p.x - dragStart.pointer.x, dragStart.bounds.y + p.y - dragStart.pointer.y); } break;
-      case 'drag_end': dragging = false; break;
+      case 'drag_start': {
+        stopDrag();
+        dragging = true; stopMovement();
+        const pointer = !x11 && wayland && Number.isFinite(command.x) && Number.isFinite(command.y)
+          ? { x: command.x, y: command.y }
+          : screen.getCursorScreenPoint();
+        dragStart = { pointer, bounds: pet.getBounds() };
+        dragLastPosition = { x: dragStart.bounds.x, y: dragStart.bounds.y };
+        break;
+      }
+      case 'drag':
+        if (dragging && dragStart) {
+          if (x11) {
+            if (!dragTimer) {
+              updateDragPosition(screen.getCursorScreenPoint());
+              dragTimer = setInterval(() => updateDragPosition(screen.getCursorScreenPoint()), (1000 / settings.fps));
+            }
+          } else {
+            const pointer = wayland ? { x: command.x, y: command.y } : screen.getCursorScreenPoint();
+            updateDragPosition(pointer);
+          }
+        }
+        break;
+      case 'drag_end': stopDrag(); break;
       case 'roam_now': if (!roam(true)) notify({ type: 'notice', message: '她现在不方便移动。' }); break;
       case 'input': {
         if (typeof command.text !== 'string' || !command.text.trim() || command.text.length > 4000) break;
         spokeAt = Date.now();
         if (preview) { notify({ type: 'notice', message: '界面预览：消息未提交人物后端' }); break; }
         if (observationState().enabled && !observing && !dragging && !locked && status.available) {
-          send({ operation: 'input', text: command.text, message_id: command.message_id, wait_for_screen: true });
-          capture(true, command.text, command.message_id);
+          if (send({ operation: 'input', text: command.text, message_id: command.message_id, wait_for_screen: true }))
+            capture(true, command.text, command.message_id);
         } else send({ operation: 'input', text: command.text, message_id: command.message_id, clear_screen: true });
         break;
       }
@@ -396,14 +473,15 @@ function setupIPC() {
 app.whenReady().then(async () => {
 if (!app.requestSingleInstanceLock() && !smoke) { app.quit(); }
 else {
-  const remoteFile = process.env.DWORLD_PET_LINK_FILE || (process.platform === 'win32' ? join(app.getPath('userData'), 'remote-link.json') : '');
+  const remoteFile = localBackend ? '' : process.env.DWORLD_PET_LINK_FILE ||
+    (process.platform === 'win32' ? join(app.getPath('userData'), 'remote-link.json') : '');
   if (remoteFile) {
     try { remote = JSON.parse(await readFile(remoteFile, 'utf8')) || {}; }
-    catch (error) { if (error.code !== 'ENOENT' || process.platform === 'win32') remote = {}; }
+    catch { remote = {}; }
   }
-  try { settings = normalizeSettings(JSON.parse(await readFile(settingsFile(), 'utf8'))); }
-  catch { settings = normalizeSettings({}); }
-  if (remote) settings = normalizeSettings({ ...settings, observationEnabled: false, voice: false });
+  const initialSettings = remote ? { observationEnabled: false } : {};
+  try { settings = normalizeSettings({ ...initialSettings, ...JSON.parse(await readFile(settingsFile(), 'utf8')) }); }
+  catch { settings = normalizeSettings(initialSettings); }
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => callback(permission === 'media'));
   setupIPC();
   const area = screen.getPrimaryDisplay().workArea;
@@ -418,6 +496,10 @@ else {
   pet.webContents.on('will-navigate', event => event.preventDefault());
   await pet.loadFile(join(root, 'index.html'));
   pet.showInactive();
+  if (x11) {
+    const error = await setX11DockType(pet);
+    if (error) console.warn(`Could not mark the pet window as a dock window: ${error.message}`);
+  }
   const icon = nativeImage.createFromPath(iconPath).resize({ height: 28 });
   tray = new Tray(icon); tray.setToolTip('Dworld 桌面伙伴'); updateTray();
   tray.on('double-click', () => { locked = false; pet.showInactive(); });
@@ -455,7 +537,7 @@ else {
 app.on('before-quit', () => {
   closing = true;
   clearTimeout(reconnectTimer);
-  stopScreenShare();
+  stopScreenShare(); stopDrag();
   clearInterval(statusTimer); clearInterval(observationTimer); clearInterval(roamTimer); stopMovement();
   send({ operation: 'close' });
   remoteSocket?.close();
