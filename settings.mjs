@@ -2,7 +2,7 @@ import { interactionClips } from './sprites.mjs';
 
 const api = window.pet;
 const $ = selector => document.querySelector(selector);
-let { settings, remote, observation } = await api.bootstrap();
+let { settings, remote, observation, x11 } = await api.bootstrap();
 const dirty = new Set();
 const pages = {
   appearance: ['外观', '大小与行动'],
@@ -24,6 +24,7 @@ function selectTab(name) {
 }
 
 function sync() {
+  $('#fps-setting').hidden = !x11;
   for (const [key, value] of Object.entries(settings)) {
     const element = document.getElementById(key);
     if (!element || key === 'observationEnabled' || dirty.has(key)) continue;
