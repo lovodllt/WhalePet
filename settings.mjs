@@ -2,7 +2,7 @@ import { interactionClips } from './sprites.mjs';
 
 const api = window.pet;
 const $ = selector => document.querySelector(selector);
-let { settings, remote, observation, x11 } = await api.bootstrap();
+let { settings, observation, x11 } = await api.bootstrap();
 const dirty = new Set();
 const pages = {
   appearance: ['外观', '大小与行动'],
@@ -32,8 +32,7 @@ function sync() {
     else element.value = value;
   }
   $('#observationEnabled').checked = observation.enabled;
-  $('#observationEnabled').disabled = remote || observation.pending;
-  if (remote) for (const id of ['voice', 'microphone', 'speaker']) $(`#${id}`).disabled = true;
+  $('#observationEnabled').disabled = observation.pending;
   $('#scale-value').value = `${Math.round(Number($('#scale').value) * 100)}%`;
 }
 

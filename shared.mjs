@@ -1,3 +1,6 @@
+export const MAX_LINK_MESSAGE_BYTES = 16 * 1024 * 1024;
+export const MAX_LINK_DISPLAYS = 16;
+
 export const defaults = {
   mode: 'normal', observationEnabled: true, voice: false, roam: true, scale: 1, volume: .75, fps: 30,
   normalCapture: 300, companionCapture: 60, normalSpeech: 600, companionSpeech: 120,

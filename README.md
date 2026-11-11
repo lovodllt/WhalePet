@@ -2,7 +2,7 @@
 
 Dworld 桌面端开发预览版。桌宠连接 Dworld 中的同一人物，支持文字聊天、按需/定时屏幕观察、单次录音与持续听两种收音模式，以及语音回复。人物使用 GPT 宠物库“deepseek酱”的原始透明动作素材；尚未接入 Live2D，也没有便携安装包。
 
-Linux 和 Windows 原生启动入口都保留。Windows 的多屏采集、麦克风和扬声器尚未完成目标设备验收；远程模式目前仅支持文字。
+Windows 默认连接 Linux 上的 Dworld 人物后端，由 Windows 桌面端采集画面、录音和播放语音。跨设备多屏、麦克风和扬声器尚待实机验收。
 
 ## 启动
 
@@ -13,7 +13,7 @@ Linux 和 Windows 原生启动入口都保留。Windows 的多屏采集、麦克
 
 预览模式只显示界面，不读取屏幕、不接收麦克风，也不调用人物后端。Linux 启动脚本使用 X11/Xwayland；Wayland 屏幕共享走系统 portal。运行桌面窗口需要图形桌面会话。
 
-桌面端位于 Dworld 项目中的 `WhalePet` 子目录。本机后端模式要求 `WhalePet` 的上一级目录包含 `virtual_character`、`config`、`data`、`deploy` 等 Dworld 项目文件，并且启动桌面端的 Python 能加载项目依赖。Windows 默认用 Python Launcher 的 `py -3`；可在启动前设置 `DWORLD_PYTHON` 指向所需解释器。Node 依赖通过 `npm ci` 安装；Python 模型、识别和合成服务沿用 Dworld 项目环境，不由此仓库安装。
+Linux 本机后端和 Linux 远程连接服务都要求 `WhalePet` 位于 Dworld 项目中，且 Python 能加载项目依赖。Windows 单机开发可显式运行 `start-windows.cmd --local-backend`，需要同样的 Dworld 目录和 Python 环境，默认用 `py -3`。可通过 `DWORLD_PYTHON` 指定解释器。模型、识别和合成服务沿用 Dworld 项目环境。
 
 ## 使用
 
@@ -26,7 +26,7 @@ Linux 和 Windows 原生启动入口都保留。Windows 的多屏采集、麦克
 - “允许观察”是开关：关闭时停止观察并盖上钢盆；开启只建立共享，不立刻分析，之后按设定间隔观察。设置中也可切换。
 - 盖上的盆会跟随人物各动画帧的头部位置移动和倾斜。
 - Linux Wayland 下，开启观察时需在系统窗口授权屏幕共享；共享会话结束后需重新开启观察。其他平台通过 Electron `desktopCapturer` 获取屏幕缩略图。各显示器必须都能对应到采集来源，否则本次观察会报错，不会把部分屏幕当成完整画面。
-- 取画面时会短暂隐藏桌宠内容以免遮挡。屏幕内容只在本机采集后交给人物视觉流程，不会经 Windows 远程文字连接发送。
+- 取画面时会短暂隐藏桌宠内容以免遮挡。Windows 远程模式开启观察后，会把各屏幕的画面通过私有连接交给 Linux 上的人物视觉流程。
 - 设置中分别调整两种模式的观察间隔与发言最小间隔，以及大小、音量和输入输出设备。
 - 设置中的人物大小滑块支持 50%–180%，拖动时预览、松开即保存，下次启动沿用。
 - 设置中的“互动”可选招手、小跳、探头、轻摆和欠身，并可找回、隐藏和退出桌宠。设置按外观、陪伴、语音、互动分组，支持浅深色与减少动态。
@@ -40,15 +40,15 @@ Linux 和 Windows 原生启动入口都保留。Windows 的多屏采集、麦克
 
 本机模式由桌面主进程启动 `bridge.py`，通过标准输入输出与 Dworld 后端通信，不新增公网监听。桥接使用原配置和人物状态，不启动生活时钟或微信发送器，也不修改原配置。
 
-## Windows 远程文字连接
+## Windows 连接 Linux 人物后端
 
 Linux 的 `start-link.sh` 启动一个仅监听本机的桌宠连接服务，用户态 Tailscale 将私网访问转发到它。连接配置位于 Linux 私有目录 `data/production/desktop-link/remote-link.json`，含密钥，不得公开分享或放入源码包。两台设备需加入同一 Tailscale 网络；通信在 Tailscale 隧道中加密，并额外验证密钥。服务每次只接受一个远程桌宠。
 
-远程连接适用于 Windows 桌面端连接另一台运行 Dworld 后端的 Linux 主机。Windows 端安装 Node.js 22.12+ 并运行 `install-windows.cmd`；配置文件不存在时，桌面端默认使用本机后端。启用远程模式时，将 Linux 端生成的 `remote-link.json` 安全放入 `%APPDATA%\dworld-desktop-pet\remote-link.json`。远程模式只转发人物状态、文字输入、文字回复和必要确认，不需要 Windows Python 或 Dworld Python 包。
+Windows 端运行 `install-windows.cmd`，将 Linux 端的 `remote-link.json` 安全放入 `%APPDATA%\dworld-desktop-pet\remote-link.json`，然后运行 `start-windows.cmd`。也可通过 `DWORLD_PET_LINK_FILE` 指定配置路径。Windows 端只需 Node.js 和桌面端依赖。缺少有效配置时，桌宠会显示连接配置提示。
 
-Linux 端通过 `start-link.sh` 启动连接服务，默认读取 WhalePet 同级 `data/production/desktop-link/remote-link.json`。Tailscale 需在两台设备上运行并配置把 Windows 客户端流量转发到 Linux 本机监听端口；连接配置包含密钥，不要公开分享或提交到源码。服务每次只接受一个远程桌宠，Linux 主机及连接服务需要保持运行；目前没有随系统自动启动。远程连接尚未完成跨设备真实网络验收。
+Linux 主机及连接服务需要保持运行。更新时先重启 Linux 的连接服务，再启动更新后的 Windows 桌面端。
 
-断线后 Windows 端会每 3 秒尝试重连；断线期间提交的消息不会自动重发。远程模式不支持屏幕观察、麦克风、语音回复和完整网页活动动作同步。
+远程设置单独保存。首次连接时屏幕观察和语音回复默认关闭，可在桌宠设置中启用。屏幕观察支持按需和定时采集，单次最多 16 块显示器、16 MiB。麦克风支持单次录音和持续听，识别、合成及桌面经历的处理沿用 Linux 端的现有人物流程。断线时停止录音和播放，每 3 秒尝试重连。断线期间提交的消息不会自动重发。
 
 新代码在 `virtual_character/desktop_pet.py`。桌面出站复用现有 `voice_call` 保留通道，因此已经运行的微信发送器也会跳过它；桌面会话、主动屏幕交流与用户回复另有来源标记。气泡显示与音频播放分别记回执。
 
