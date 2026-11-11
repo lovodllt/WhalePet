@@ -183,7 +183,7 @@ function startRemote() {
   });
 }
 
-async function capture(manual = false, text) {
+async function capture(manual = false, text, messageId) {
   if (!observationState().enabled || observing || dragging || locked || (!manual && (panel || !status.available))) return;
   if (preview) {
     notify({ type: 'notice', message: '界面预览不读取屏幕，也不调用人物模型' });
@@ -197,6 +197,7 @@ async function capture(manual = false, text) {
   stopMovement();
   const generation = captureGeneration;
   const visible = pet.isVisible();
+  let forwarded = false;
   try {
     const displays = screen.getAllDisplays();
     if (visible) notify({ type: 'capture_visibility', hidden: true });
@@ -232,7 +233,9 @@ async function capture(manual = false, text) {
     if (!manual && fingerprint === previousPixels) { observing = false; return; }
     previousPixels = fingerprint;
     const gap = settings.mode === 'companion' ? settings.companionSpeech : settings.normalSpeech;
-    send({ operation: 'observe', screens: frames, manual, text, may_speak: !speechPlaying && Date.now() - spokeAt >= gap * 1000 });
+    send({ operation: 'observe', screens: frames, manual, text, message_id: messageId, submitted: !!messageId,
+      may_speak: !speechPlaying && Date.now() - spokeAt >= gap * 1000 });
+    forwarded = true;
     notify({ type: 'observing', screen_count: frames.length });
   } catch (error) {
     if (generation === captureGeneration) {
@@ -242,6 +245,7 @@ async function capture(manual = false, text) {
     }
   } finally {
     if (visible && !closing) notify({ type: 'capture_visibility', hidden: false });
+    if (manual && messageId && !forwarded && !closing) send({ operation: 'screen_unavailable', message_id: messageId });
   }
 }
 
@@ -371,9 +375,10 @@ function setupIPC() {
         if (typeof command.text !== 'string' || !command.text.trim() || command.text.length > 4000) break;
         spokeAt = Date.now();
         if (preview) { notify({ type: 'notice', message: '界面预览：消息未提交人物后端' }); break; }
-        if (/看[看下]|屏幕|这[个段里]/u.test(command.text) && observationState().enabled && !observing && status.available) {
-          capture(true, command.text);
-        } else send({ operation: 'input', text: command.text, message_id: command.message_id });
+        if (observationState().enabled && !observing && !dragging && !locked && status.available) {
+          send({ operation: 'input', text: command.text, message_id: command.message_id, wait_for_screen: true });
+          capture(true, command.text, command.message_id);
+        } else send({ operation: 'input', text: command.text, message_id: command.message_id, clear_screen: true });
         break;
       }
       case 'ack': if (!preview && lastReply?.outbound_id === command.outbound_id) send(command); break;
