@@ -43,6 +43,8 @@ const replyOperations = new Set(['ack', 'speak', 'audio_receipt']);
 const base64 = (value, limit) => typeof value === 'string' && value.length > 0 && value.length <= limit
   && value.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(value);
 const validText = value => typeof value === 'string' && value.length <= 4000 && value.trim();
+const validMessageId = value => typeof value === 'string' && value.length > 0 && value.length <= 120;
+const optionalBoolean = value => value === undefined || typeof value === 'boolean';
 
 function screenFor(frame) {
   if (!frame || typeof frame.display_id !== 'string' || !frame.display_id || frame.display_id.length > 64
@@ -57,15 +59,21 @@ function screenFor(frame) {
 function commandFor(value, reply) {
   if (!value || typeof value !== 'object') return;
   if (simpleOperations.has(value.operation)) return { operation: value.operation };
-  if (value.operation === 'input' && validText(value.text)
-      && typeof value.message_id === 'string' && value.message_id.length > 0 && value.message_id.length <= 120)
-    return { operation: 'input', text: value.text, message_id: value.message_id };
+  if (value.operation === 'input' && validText(value.text) && validMessageId(value.message_id)
+      && optionalBoolean(value.clear_screen) && optionalBoolean(value.wait_for_screen))
+    return { operation: 'input', text: value.text, message_id: value.message_id,
+      clear_screen: value.clear_screen, wait_for_screen: value.wait_for_screen };
+  if (value.operation === 'screen_unavailable' && validMessageId(value.message_id))
+    return { operation: 'screen_unavailable', message_id: value.message_id };
   if (value.operation === 'observe' && Array.isArray(value.screens) && value.screens.length > 0
       && value.screens.length <= MAX_LINK_DISPLAYS && typeof value.manual === 'boolean' && typeof value.may_speak === 'boolean'
+      && optionalBoolean(value.submitted)
+      && (value.submitted ? value.manual && validMessageId(value.message_id) : value.message_id === undefined)
       && (value.text === undefined || (value.manual && validText(value.text)))) {
     const screens = value.screens.map(screenFor);
     if (screens.every(Boolean) && new Set(screens.map(frame => frame.display_id)).size === screens.length)
-      return { operation: 'observe', screens, manual: value.manual, text: value.text, may_speak: value.may_speak };
+      return { operation: 'observe', screens, manual: value.manual, text: value.text, may_speak: value.may_speak,
+        message_id: value.message_id, submitted: value.submitted };
   }
   if (value.operation === 'pcm' && base64(value.pcm, 65536) && Buffer.from(value.pcm, 'base64').length % 2 === 0)
     return { operation: 'pcm', pcm: value.pcm };

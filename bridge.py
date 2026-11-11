@@ -49,6 +49,7 @@ class Bridge:
         self.asr = self.tts = None
         self.reply_busy = False
         self.waiting_screen = None
+        self.waiting_screen_id = None
         self.gateway_config = deepcopy(config)
         self.gateway_config['models']['home'] = config['models']['home'] / 'desktop-pet' / self.session.split(':')[-1]
         self.gateway_config['models']['call'] = dict(config['models'].get('call', {}), transport='provider_text')
@@ -69,6 +70,7 @@ class Bridge:
 
     def interrupt(self):
         self.generation += 1
+        self.waiting_screen = self.waiting_screen_id = None
         self.stop_audio()
         with self.pipeline() as pipeline:
             pipeline.cancel_outbounds()
@@ -128,6 +130,7 @@ class Bridge:
         finally:
             if self.waiting_screen == generation:
                 self.waiting_screen = None
+                self.waiting_screen_id = None
                 self.wake.set()
             emit({'type': 'observation_finished'})
 
@@ -204,19 +207,36 @@ class Bridge:
                 emit(dict(pipeline.status(), type='status'))
         elif operation == 'input':
             self.interrupt()
-            with self.pipeline() as pipeline:
-                result = pipeline.submit(command['text'], command['message_id'])
+            if command.get('clear_screen') or command.get('wait_for_screen'):
+                self.latest = None
+            if command.get('wait_for_screen'):
+                self.waiting_screen, self.waiting_screen_id = self.generation, command['message_id']
+            try:
+                with self.pipeline() as pipeline:
+                    result = pipeline.submit(command['text'], command['message_id'])
+            except Exception:
+                self.waiting_screen = self.waiting_screen_id = None
+                raise
             emit({'type': 'accepted', 'held': result['held']})
             self.wake.set()
         elif operation == 'observe':
             if command.get('manual'):
-                self.interrupt()
-                self.latest = None
-                self.waiting_screen = self.generation
-                with self.pipeline() as pipeline:
-                    pipeline.submit(command.get('text') or '看看我在做什么，陪我聊聊吧。', uuid4().hex)
+                if command.get('submitted'):
+                    if self.waiting_screen != self.generation or self.waiting_screen_id != command.get('message_id'):
+                        emit({'type': 'observation_finished'})
+                        return
+                else:
+                    self.interrupt()
+                    self.latest = None
+                    self.waiting_screen = self.generation
+                    with self.pipeline() as pipeline:
+                        pipeline.submit(command.get('text') or '看看我在做什么，陪我聊聊吧。', command.get('message_id') or uuid4().hex)
             threading.Thread(target=self.observation,
                 args=(command, self.generation, self.observation_generation), daemon=True).start()
+        elif operation == 'screen_unavailable':
+            if self.waiting_screen == self.generation and self.waiting_screen_id == command.get('message_id'):
+                self.waiting_screen = self.waiting_screen_id = None
+                self.wake.set()
         elif operation == 'pause_observation':
             self.observation_generation += 1
             self.latest = None
