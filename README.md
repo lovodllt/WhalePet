@@ -6,9 +6,9 @@ Linux 首发的桌面端，连接 Dworld 中同一个人物，支持多屏观察
 
 ## 启动
 
-Linux 下运行 `./start.sh`，`./start.sh --preview` 只预览界面，不读屏幕、不启用麦克风，也不调用人物模型。
+Linux 下运行 `./start.sh`，`./start.sh --preview` 只预览界面，不读屏幕、不启用麦克风，也不调用人物模型。Windows 直接运行 `start-windows.cmd`；`preview-windows.cmd` 只预览界面。Windows 原生运行，不需要 WSL。
 
-其他机器先在本目录运行 `npm ci`。Python 需能够导入相邻的 `virtual_character` 包及其依赖；语音沿用 Dworld 已安装的识别模型与合成服务。Wayland 采集还需系统 Python 的 PyGObject、GStreamer 和 PipeWire 插件。Linux 窗口当前使用 X11 或 Xwayland；Wayland 会话通过系统屏幕共享接口采集。Windows、macOS 和原生 Wayland 窗口尚未验收。
+其他机器先在本目录运行 `npm ci`。本机连接人物时，Python 需能够导入相邻的 `virtual_character` 包及其依赖；Windows 默认通过 Python Launcher 的 `py -3` 启动，也可用 `DWORLD_PYTHON` 指定 Python 可执行文件。语音沿用 Dworld 已安装的识别模型与合成服务。Wayland 采集还需系统 Python 的 PyGObject、GStreamer 和 PipeWire 插件。Linux 窗口当前使用 X11 或 Xwayland；Wayland 会话通过系统屏幕共享接口采集。Windows 使用 Electron 桌面采集接口；仍需在目标 Windows 设备上验收多屏和语音设备。
 
 ## 使用
 
@@ -39,7 +39,7 @@ Linux 下运行 `./start.sh`，`./start.sh --preview` 只预览界面，不读�
 
 Linux 的 `start-link.sh` 启动一个仅监听本机的桌宠连接服务，用户态 Tailscale 将私网访问转发到它。连接配置位于 Linux 私有目录 `data/production/desktop-link/remote-link.json`，含密钥，不得公开分享或放入源码包。两台设备需加入同一 Tailscale 网络；通信在 Tailscale 隧道中加密，并额外验证密钥。服务每次只接受一个远程桌宠。
 
-Windows 安装 Tailscale 和 Node.js 22.12 或更高版本后，双击 `install-windows.cmd` 安装依赖，再双击 `preview-windows.cmd` 可离线预览。要连接人物，将 Linux 上的配置文件通过安全渠道放入 `%APPDATA%\dworld-desktop-pet\remote-link.json`（目录不存在时先创建），然后双击 `start-windows.cmd`。Linux 的连接服务需保持运行；它目前不会随系统自动启动。命令行也可用 `npm ci`、`npx --no-install install-electron` 和 `npm run start:remote`。
+Windows 安装 Node.js 22.12 或更高版本后，双击 `install-windows.cmd` 安装依赖，再双击 `start-windows.cmd` 原生启动桌宠；`preview-windows.cmd` 可离线预览。要连接人物，Windows 还需安装 Python 3 和项目所需依赖，并确保 Python 能导入相邻的 `virtual_character` 包；需要的话可在启动前设置 `DWORLD_PYTHON` 指向 Python 可执行文件。也可放置 Linux 私有连接配置到 `%APPDATA%\dworld-desktop-pet\remote-link.json`，此时桌宠走远程文字连接，不要求 Windows Python 或 Dworld Python 包。Linux 的连接服务需保持运行；它目前不会随系统自动启动。命令行对应 `npm ci`、`npx --no-install install-electron` 和 `npm run start:windows`。
 
 本次只转发人物当前作息状态、用户输入的文字、人物文字回复及必要的确认，不发送屏幕或音频。Windows 远程观察、语音、完整网页活动动作同步及跨设备真实网络验证尚未完成。断线后自动尝试重连；断线期间提交的消息不会自动重发。请勿对外公开连接文件。
 

@@ -152,7 +152,9 @@ function startBridge() {
     return;
   }
   if (remote) return startRemote();
-  bridge = spawn(process.env.DWORLD_PYTHON || 'python3', [join(root, 'bridge.py')], {
+  const python = process.env.DWORLD_PYTHON || (process.platform === 'win32' ? 'py' : 'python3');
+  const pythonArgs = process.platform === 'win32' && !process.env.DWORLD_PYTHON ? ['-3'] : [];
+  bridge = spawn(python, [...pythonArgs, join(root, 'bridge.py')], {
     cwd: dirname(root), stdio: ['pipe', 'pipe', 'pipe']
   });
   createInterface({ input: bridge.stdout }).on('line', line => {
@@ -445,7 +447,7 @@ else {
   const remoteFile = process.env.DWORLD_PET_LINK_FILE || (process.platform === 'win32' ? join(app.getPath('userData'), 'remote-link.json') : '');
   if (remoteFile) {
     try { remote = JSON.parse(await readFile(remoteFile, 'utf8')) || {}; }
-    catch (error) { if (error.code !== 'ENOENT' || process.platform === 'win32') remote = {}; }
+    catch (error) { if (error.code === 'ENOENT') remote = undefined; else remote = {}; }
   }
   try { settings = normalizeSettings(JSON.parse(await readFile(settingsFile(), 'utf8'))); }
   catch { settings = normalizeSettings({}); }
